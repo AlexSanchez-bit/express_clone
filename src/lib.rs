@@ -1,7 +1,10 @@
 pub mod Express
 {
     use std::net::{TcpStream,TcpListener};
-    use std::io::prelude::Read;
+    use std::io::prelude::{Read,Write};
+    use std::sync::{Arc,Mutex};
+ 
+   type Exception =Box<dyn std::error::Error>;
 
     pub struct App
     {
@@ -46,13 +49,69 @@ pub mod Express
                   Ok(true)
         }
 
-        fn handle_conection(end_points:Vec<String>,mut stream:TcpStream)
+        fn handle_conection(_end_points:Vec<String>,mut stream:TcpStream)
         {
-            let mut buffer = [0;512];
+            let mut buffer =[0u8;512];
             stream.read(&mut buffer).unwrap();
-            let data = String::from_utf8_lossy(&buffer[..]);
-           println!("se intento hacer conexion a :{}",data); 
+            print!("se hizo request a :{} ",String::from_utf8_lossy(&buffer));
+            let stream= Arc::new(Mutex::new(stream));
+             let mut req = Response::new(Arc::clone(&stream));           
+             //req.send("se respondio del servidor");
+             req.send_file("/home/nadie/datos/telegram/ProyectoNodejs/Museo/src/views/colaborar.html").unwrap();
         }
+    }
+
+
+    pub struct Response
+    {
+        stream:Arc<Mutex<TcpStream>>,        
+    }
+
+    impl Response
+    {
+        pub fn new(stream:Arc<Mutex<TcpStream>>)->Response
+        {
+            Response
+            {
+                stream
+            }
+        }
+
+        pub fn send_file(&mut self,filepath:&str)->Result<(),Exception>
+        {
+            use std::fs;
+           let readed = fs::read(filepath).unwrap();
+
+            let result = String::from_utf8(readed.clone());
+
+            match result
+            {
+                Ok(text)=>
+                {
+                self.send(&text[..])?;
+                },
+                Err(_)=>
+                {
+           let mut stream = self.stream.lock().unwrap();
+           stream.write(&readed)?;
+           stream.flush().unwrap();
+                }
+            }
+
+           Ok(())
+        }
+
+
+        pub fn send(&mut self,data:&str)->Result<(),Exception>
+        {
+            let status="HTTP/1.1 200 OK\r\n\r\n";
+            let response = format!("{}{}",status,data);
+             let mut stream=self.stream.lock().unwrap();
+             stream.write(response.as_bytes())?;
+             stream.flush()?;
+           Ok(()) 
+        }
+
     }
 
 }
@@ -107,7 +166,7 @@ mod thread_pool
          fn finish(self)//espra a que los hilos terminen de ejecutar 
         {
             let id = self.id;
-            self.work_flow.join().unwrap_or_else(|ex|{
+            self.work_flow.join().unwrap_or_else(|_|{
                 println!("error terminando el hilo: {}",id);
             });        
         }
@@ -150,7 +209,7 @@ mod thread_pool
         pub fn send_data<T>(&self,method:T) where T :FnOnce() + Send +'static
         {
             self.data_sender.send(Message::Do(Box::new(method))).unwrap_or_else(|err|{
-                print!("fallo al enviar un trabajo");
+                print!("fallo al enviar un trabajo :{}",err);
             });
         } 
     }
@@ -159,7 +218,7 @@ mod thread_pool
         impl Drop for ThreadPool{
 
              fn drop(&mut self){
-                    for i in 0..self.number_of_threads                    {                    
+                    for _ in 0..self.number_of_threads                    {                    
                         self.data_sender.send(Message::Terminate).unwrap();
                     }
                     while self.workers.len() >0

@@ -1,11 +1,13 @@
-use express_clone::Express::App;
+use express_clone::express::App;
 fn main() {
 
     let mut app = App::new(4);
-    app.get("/");
-    app.get("/home");
-    app.get("/endp1");
-    app.get("/endp2");
-    app.listen("127.0.0.1",8080);
+    app.get("/",|req,mut res|{
+        res.send("respondido desde el server").unwrap();
+    });
+    app.get("/home",|req,mut res|{
+        res.send("respondido desde el server").unwrap();
+    });
+    app.listen("127.0.0.1",8080).unwrap();
 
 }

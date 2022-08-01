@@ -1,11 +1,6 @@
 use express_clone::express::App;
 fn main() {
 
-    let alg = b"GET / HTTP/1.1\r\n";
-    let other = String::from("GET / HTTP/").as_bytes();
-
-    
-
     //-----------------
     let mut app = App::new(4);
     app.get("/", |_req, mut res| {

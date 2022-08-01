@@ -9,21 +9,21 @@ pub mod express {
 
     type Exception = Box<dyn std::error::Error>;
     type Callback =Box<dyn FnMut(Request,Response) + Send + 'static>;
-    type CallbackContainer =HashMap<String, Arc<Mutex<callback_caller>>>;
+    type CallbackContainer =HashMap<String, Arc<Mutex<CallbackCaller>>>;
 
 
-    struct callback_caller
+    struct CallbackCaller
     {
         callback:Callback
     }
 
-    impl callback_caller
+    impl CallbackCaller
     {
 
-        fn new<T>(cb:T)->callback_caller
+        fn new<T>(cb:T)->CallbackCaller
             where T:FnMut(Request,Response) +Send +'static
         {
-            callback_caller{
+            CallbackCaller{
                 callback:Box::new(cb)
             }
         }
@@ -66,9 +66,9 @@ pub mod express {
         where
             T: FnMut(Request, Response) + Send +Sync+ 'static,
         {
-            let callback = Arc::new(Mutex::new(callback_caller::new(callback)));
+            let callback = Arc::new(Mutex::new(CallbackCaller::new(callback)));
             self.getter.insert(
-                String::from(format!("GET {} HTTP/1.1\r\nHost:", end_point)),
+                String::from(format!("GET {} HTTP/1.1\r\n", end_point)),
             callback,
             );
         }
@@ -77,9 +77,9 @@ pub mod express {
         where
             T: FnMut(Request, Response) + Send +Sync+ 'static,
         {
-            let callback = Arc::new(Mutex::new(callback_caller::new(callback)));
+            let callback = Arc::new(Mutex::new(CallbackCaller::new(callback)));
             self.setter.insert(
-                String::from(format!("GET {} HTTP/1.1\r\n", end_point)),
+                String::from(format!("SET {} HTTP/1.1\r\n", end_point)),
             callback,
             );
         }
@@ -92,26 +92,23 @@ pub mod express {
 
             for stream in listenner.incoming() {
                 let mut stream = stream.unwrap();
-
                 let default:Callback=Box::new(
-                                    |req,mut res:Response|{
+                                    |_req,mut res:Response|{
                                         res.send("nada que mostrar").unwrap();
                                     }
                     );
-                let mut executor=Arc::new(Mutex::new(callback_caller::new(default)));
-
+                let mut executor=Arc::new(Mutex::new(CallbackCaller::new(default)));
                 let get = App::handle_conection(self.getter.keys(), &mut stream);
                 let set = App::handle_conection(self.setter.keys(), &mut stream);
-
                 let mut req = Request::new("", "");
                 if let Some(key) = get {
                     req = Request::new(&key.clone(), &key.clone());
                     let meth =self.getter.get(&key).unwrap();                    
                     executor=Arc::clone(meth);
-                }else if let Some(key) = set
-                {
+                }
+                else if let Some(key) = set{
                     req = Request::new(&key.clone(), &key.clone());
-                    let meth =self.setter.get(&key).unwrap();                    
+                    let meth =self.getter.get(&key).unwrap();                    
                     executor=Arc::clone(meth);
                 }
 
@@ -125,24 +122,21 @@ pub mod express {
             Ok(true)
         }
 
-        fn handle_conection<'a, T>(mut end_points: T, stream: &mut TcpStream) -> Option<String>
+        fn handle_conection<'a, T>(end_points: T, stream: &mut TcpStream) -> Option<String>
         where
             T: Iterator<Item = &'a String>,
         {
             let mut buffer = [0; 512];
             stream.read(&mut buffer).unwrap();
-              println!("se hizo req a:{:?} ",String::from_utf8_lossy(&buffer));
             let mut matched = Option::None;
-            if end_points.any(|elem| {
-                  println!("\n\n y el elemento era: {:?}",elem);
-                if buffer.starts_with(elem.as_bytes()) {
-                    print!("aqui llego algo");
-                    matched = Option::Some(elem.clone());
-                    true
-                } else {
-                    false
+
+            for elem in end_points
+            {
+                if buffer.starts_with(elem.as_bytes()) 
+                {
+                    matched=Some(elem.clone());
                 }
-            }) {}
+            }
             matched
         }
 
@@ -161,7 +155,7 @@ pub mod express {
 //object to save the request data
     {
         pub params: HashMap<String, String>,
-        original_endpoint: String,
+        _original_endpoint: String,
     }
 
     impl Request {
@@ -178,7 +172,7 @@ pub mod express {
 
             Request {
                 params: params_map,
-                original_endpoint: String::from(original),
+                _original_endpoint: String::from(original),
             }
         }
     }

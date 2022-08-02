@@ -8,33 +8,28 @@ pub mod express {
     static __DIRNAME: &str = "./";
 
     type Exception = Box<dyn std::error::Error>;
-    type Callback =Box<dyn FnMut(Request,Response) + Send + 'static>;
-    type CallbackContainer =HashMap<String, Arc<Mutex<CallbackCaller>>>;
+    type Callback = Box<dyn FnMut(Request, Response) + Send + 'static>;
+    type CallbackContainer = HashMap<String, Arc<Mutex<CallbackCaller>>>;
 
-
-    struct CallbackCaller
-    {
-        callback:Callback
+    struct CallbackCaller {
+        callback: Callback,
     }
 
-    impl CallbackCaller
-    {
-
-        fn new<T>(cb:T)->CallbackCaller
-            where T:FnMut(Request,Response) +Send +'static
+    impl CallbackCaller {
+        fn new<T>(cb: T) -> CallbackCaller
+        where
+            T: FnMut(Request, Response) + Send + 'static,
         {
-            CallbackCaller{
-                callback:Box::new(cb)
+            CallbackCaller {
+                callback: Box::new(cb),
             }
         }
 
-        fn call(&mut self,req:Request,res:Response){
-            (*self.callback)(req,res);
+        fn call(&mut self, req: Request, res: Response) {
+            (*self.callback)(req, res);
         }
-
     }
 
-   
     pub struct App {
         getter: CallbackContainer,
         setter: CallbackContainer,
@@ -64,82 +59,76 @@ pub mod express {
 
         pub fn get<T>(&mut self, end_point: &str, callback: T)
         where
-            T: FnMut(Request, Response) + Send +Sync+ 'static,
+            T: FnMut(Request, Response) + Send + Sync + 'static,
         {
             let callback = Arc::new(Mutex::new(CallbackCaller::new(callback)));
             self.getter.insert(
                 String::from(format!("GET {} HTTP/1.1\r\n", end_point)),
-            callback,
+                callback,
             );
         }
 
         pub fn set<T>(&mut self, end_point: &str, callback: T)
         where
-            T: FnMut(Request, Response) + Send +Sync+ 'static,
+            T: FnMut(Request, Response) + Send + Sync + 'static,
         {
             let callback = Arc::new(Mutex::new(CallbackCaller::new(callback)));
             self.setter.insert(
                 String::from(format!("SET {} HTTP/1.1\r\n", end_point)),
-            callback,
+                callback,
             );
         }
 
         pub fn listen(&mut self, ip: &str, port: u16) -> Result<bool, Box<dyn std::error::Error>> {
-            
             let listenner = TcpListener::bind(format!("{}:{}", ip, port))?;
             let mut threads = ThreadPool::new(self.threads);
             threads.initialize();
 
             for stream in listenner.incoming() {
+                let mut buffer = [0; 516];
                 let mut stream = stream.unwrap();
-                let default:Callback=Box::new(
-                                    |_req,mut res:Response|{
-                                        res.send("nada que mostrar").unwrap();
-                                    }
-                    );
-                let mut executor=Arc::new(Mutex::new(CallbackCaller::new(default)));
-                let get = App::handle_conection(self.getter.keys(), &mut stream);
-                let set = App::handle_conection(self.setter.keys(), &mut stream);
+                stream.read(&mut buffer).unwrap();
+                let default: Callback = Box::new(|_req, mut res: Response| {
+                    res.send("nada que mostrar").unwrap();
+                });
+                let mut executor = Arc::new(Mutex::new(CallbackCaller::new(default)));
+                let get = App::handle_conection(self.getter.keys(), buffer);
+                let set = App::handle_conection(self.setter.keys(), buffer);
                 let mut req = Request::new("", "");
                 if let Some(key) = get {
                     req = Request::new(&key.clone(), &key.clone());
-                    let meth =self.getter.get(&key).unwrap();                    
-                    executor=Arc::clone(meth);
-                }
-                else if let Some(key) = set{
+                    let meth = self.getter.get(&key).unwrap();
+                    executor = Arc::clone(meth);
+                } else if let Some(key) = set {
                     req = Request::new(&key.clone(), &key.clone());
-                    let meth =self.getter.get(&key).unwrap();                    
-                    executor=Arc::clone(meth);
+                    let meth = self.getter.get(&key).unwrap();
+                    executor = Arc::clone(meth);
                 }
 
                 let strea = Arc::new(Mutex::new(stream));
                 let res = Response::new(Arc::clone(&strea));
                 threads.send_data(move || {
-                    executor.lock().unwrap().call(req,res);
+                    executor.lock().unwrap().call(req, res);
                 });
             }
             drop(self.threads);
             Ok(true)
         }
 
-        fn handle_conection<'a, T>(end_points: T, stream: &mut TcpStream) -> Option<String>
+        fn handle_conection<'a, T>(end_points: T, buffer: [u8; 516]) -> Option<String>
         where
             T: Iterator<Item = &'a String>,
         {
-            let mut buffer = [0; 512];
-            stream.read(&mut buffer).unwrap();
             let mut matched = Option::None;
 
-            for elem in end_points
-            {
-                if buffer.starts_with(elem.as_bytes()) 
-                {
-                    matched=Some(elem.clone());
+            for elem in end_points {
+                if buffer.starts_with(elem.as_bytes()) {
+                    matched = Some(elem.clone());
+                    break;
                 }
             }
             matched
         }
-
     }
 
     /*

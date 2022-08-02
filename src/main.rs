@@ -2,9 +2,12 @@ use express_clone::express::App;
 fn main() {
     //-----------------
     let mut app = App::new(4);
+
+    app.static_folder("/home/nadie/datos/telegram/ProyectoNodejs/Pagina/src/public");
+    app.set_views("/home/nadie/datos/telegram/ProyectoNodejs/Pagina/src/views");
+
     app.get("/", |_req, mut res| {
-        res.send_file("/home/nadie/datos/telegram/ProyectoNodejs/Pagina/src/views/index.html")
-            .unwrap();
+        res.render("/index.html").unwrap();
     });
     app.get("/home", |_req, mut res| {
         std::thread::sleep(std::time::Duration::from_secs(10));

@@ -4,8 +4,8 @@ fn main() {
     //-----------------
     let mut app = App::new(4);
 
-    app.static_folder("/home/nadie/datos/telegram/ProyectoNodejs/Pagina/src/public");
-    app.set_views("/home/nadie/datos/telegram/ProyectoNodejs/Pagina/src/views");
+    app.static_folder("/somefolder");
+    app.set_views("/viewsfolder");
 
     app.get("/", |_req, mut res| {
         res.render("/index.html").unwrap();

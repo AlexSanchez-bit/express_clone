@@ -5,13 +5,12 @@ pub mod express {
     use std::net::{TcpListener, TcpStream};
     use std::sync::{Arc, Mutex};
 
-    static __DIRNAME: &str = "./";
-
     type Exception = Box<dyn std::error::Error>;
     type CallbackContainer = HashMap<String, Arc<Mutex<CallbackCaller>>>;
     type Callback = Box<dyn FnMut(Request, Response) + Send + 'static>;
 
-    struct CallbackCaller { //para hacer box a los callbacks y poderlos pasar entre hilos
+    struct CallbackCaller {
+        //para hacer box a los callbacks y poderlos pasar entre hilos
         callback: Callback,
     }
 
@@ -30,12 +29,11 @@ pub mod express {
         }
     }
 
-    enum HTTPSTATUS
-    {
+    enum HTTPSTATUS {
         GET,
-        SET,
+        POST,
         FILE,
-        NOTFOUND
+        NOTFOUND,
     }
 
     pub struct App {
@@ -51,8 +49,8 @@ pub mod express {
             App {
                 getter: HashMap::new(),
                 setter: HashMap::new(),
-                views: String::from(__DIRNAME),
-                static_folder: String::from(__DIRNAME),
+                views: std::env::args().nth(0).unwrap(),
+                static_folder: std::env::args().nth(0).unwrap(),
                 threads: thread_number,
             }
         }
@@ -70,21 +68,17 @@ pub mod express {
             T: FnMut(Request, Response) + Send + Sync + 'static,
         {
             let callback = Arc::new(Mutex::new(CallbackCaller::new(callback)));
-            self.getter.insert(
-                String::from(format!("{}", end_point.trim())),
-                callback,
-            );
+            self.getter
+                .insert(String::from(format!("{}", end_point.trim())), callback);
         }
 
-        pub fn set<T>(&mut self, end_point: &str, callback: T)
+        pub fn post<T>(&mut self, end_point: &str, callback: T)
         where
             T: FnMut(Request, Response) + Send + Sync + 'static,
         {
             let callback = Arc::new(Mutex::new(CallbackCaller::new(callback)));
-            self.setter.insert(
-                String::from(format!("{}", end_point.trim())),
-                callback,
-            );
+            self.setter
+                .insert(String::from(format!("{}", end_point.trim())), callback);
         }
 
         pub fn listen(&mut self, ip: &str, port: u16) -> Result<bool, Box<dyn std::error::Error>> {
@@ -94,61 +88,68 @@ pub mod express {
 
             for stream in listenner.incoming() {
                 let mut buffer = [0; 516]; //buffer para leer la entrada de datos
-                let mut stream = stream.unwrap();//stream para compartir datos por http
+                let mut stream = stream.unwrap(); //stream para compartir datos por http
                 stream.read(&mut buffer).unwrap(); //leyendo entrada al buffer;
 
-                let default: Callback = Box::new(|_req, mut res: Response| {
-                    res.send("nada que mostrar").unwrap();
+                let default: Callback = Box::new(|_req, mut res| {
+                    res.send(" noting here to show ").unwrap();
                 }); //respuesta por defecto
 
                 //creando los request y response para las respuestas
-                let mut req = Request::new("", "");
                 let strea = Arc::new(Mutex::new(stream));
-                let res = Response::new(Arc::clone(&strea),self.views.clone());
+                let res = Response::new(Arc::clone(&strea), self.views.clone());
 
                 let mut executor = Arc::new(Mutex::new(CallbackCaller::new(default))); //el que ejecutara los callbacks
 
                 let endp_status = App::handle_conection(buffer); //lee la entrada principal y devuelve el protocolo y el endpoint
-                
-                match endp_status.0 
-                {
-                    HTTPSTATUS::GET=>
-                    {
-                        req =Request::new(&endp_status.1,&endp_status.1);
-                        let cb = self.getter.get(&endp_status.1);
 
-                        match cb 
-                        {
-                            Some(_cb)=>{
-                                executor=Arc::clone(_cb);
-                            },
-                            _=>{}
+                let mut req = Request::new("", "");
+                match endp_status.0 {
+                    HTTPSTATUS::GET => {
+                        let cb =self.getter.get(&endp_status.1); 
+
+
+                        match cb {
+                            Some(_cb) => {
+                        req = Request::new(&endp_status.1, &endp_status.1);
+                                executor = Arc::clone(_cb);
+                            }
+                            None => {
+                                
+                                for key in self.getter.keys()
+                                {
+                                  if App::match_endp_params(key,&endp_status.1)
+                                  {                                     
+                                    req = Request::new(&endp_status.1, key);
+                                   executor = Arc::clone(self.getter.get(key).unwrap());
+                                   break;
+                                  }
+                                }
+                            }
                         }
                     }
-                    HTTPSTATUS::SET=>
-                    {
-                        req =Request::new(&endp_status.1,&endp_status.1);
+                    HTTPSTATUS::POST => {
+                        req = Request::new(&endp_status.1, &endp_status.1);
                         let cb = self.setter.get(&endp_status.1);
 
-                        match cb 
-                        {
-                            Some(_cb)=>{
-                                executor=Arc::clone(_cb);
-                            },
-                            _=>{}
+                        match cb {
+                            Some(_cb) => {
+                                executor = Arc::clone(_cb);
+                            }
+                            _ => {}
                         }
                     }
-                    HTTPSTATUS::FILE=>
-                    {
+                    HTTPSTATUS::FILE => {
                         let st_folder = self.static_folder.clone();
-                let file_response: Callback = Box::new(move |_req, mut res: Response| {
-                    res.send_file(&format!("{}/{}",st_folder,&endp_status.1)).unwrap_or_else(|_|{
-                        println!("no se encontro el archivo {}",endp_status.1);
-                    });
-                });
+                        let file_response: Callback = Box::new(move |_req, mut res| {
+                            res.send_file(&format!("{}/{}", st_folder, &endp_status.1))
+                                .unwrap_or_else(|_| {
+                                    println!("no se encontro el archivo {}", endp_status.1);
+                                });
+                        });
                         executor = Arc::new(Mutex::new(CallbackCaller::new(file_response)));
                     }
-                    _ =>{}
+                    _ => {}
                 }
 
                 threads.send_data(move || {
@@ -159,44 +160,59 @@ pub mod express {
             Ok(true)
         }
 
-
-        fn handle_conection( buffer: [u8; 516]) -> (HTTPSTATUS,String)
+        fn match_endp_params(with_params:&str,withouth:&str)->bool
         {
-            let endp_name = App::chop_input(buffer).trim().to_string();
-            let mut ret =(HTTPSTATUS::NOTFOUND,endp_name);
+           let params = with_params.split("/"); 
+           let original = withouth.split("/");
 
-            if App::is_file(&ret.1) 
-            {
-              ret.0=HTTPSTATUS::FILE;    
-            }else if buffer.starts_with(b"SET")
-            {
-                ret.0=HTTPSTATUS::SET;
-            }else if buffer.starts_with(b"GET")
-            {
-                ret.0=HTTPSTATUS::GET;
+           if params.clone().count() != original.clone().count()
+           {
+             return false;
+           }
+
+           for (key1,key2) in params.zip(original)
+           {
+               if key1==key2
+               {
+                   return true;
+               }
+           }
+            false
+        }
+
+        fn handle_conection(buffer: [u8; 516]) -> (HTTPSTATUS, String) {
+            let endp_name = App::chop_input(buffer).trim().to_string();
+            let mut ret = (HTTPSTATUS::NOTFOUND, endp_name);
+
+            if App::is_file(&ret.1) {
+                ret.0 = HTTPSTATUS::FILE;
+            } else if buffer.starts_with(b"POST") {
+                ret.0 = HTTPSTATUS::POST;
+            } else if buffer.starts_with(b"GET") {
+                ret.0 = HTTPSTATUS::GET;
             }
 
             ret
         }
 
-        fn is_file(enp_name:&String)->bool
-        {
-            enp_name.contains(".")                   
+        fn is_file(enp_name: &String) -> bool {
+            enp_name.contains(".")
         }
-        fn chop_input(buffer:[u8;516])->String
-        {
+        fn chop_input(buffer: [u8; 516]) -> String {
             let string = String::from_utf8_lossy(&buffer).to_string();
+            let mut i = 0;
+            let mut init = 0;
 
-            let mut i =0;
+            for letter in string.chars() {
+                if init == 0 && letter == ' ' {
+                    init = i;
+                }
 
-             for letter in string.chars()
-             {
-                 if letter=='H' 
-                 {
-                     return String::from(&string[3..i]);
-                 }
-                 i+=1;
-             }
+                if letter == 'H' {
+                    return String::from(&string[init..i]);
+                }
+                i += 1;
+            }
             string
         }
     }
@@ -210,10 +226,17 @@ pub mod express {
      *  });
      *
      * */
+
+    pub enum Data {
+        STRING(String),
+        INT(i32),
+        LONG(i64),
+        UNDEFINED,
+    }
     pub struct Request
 //object to save the request data
     {
-        pub params: HashMap<String, String>,
+        pub params: HashMap<String, Data>,
         _original_endpoint: String,
     }
 
@@ -224,9 +247,14 @@ pub mod express {
             let recibed_params = recibed.split("/").collect::<Vec<&str>>();
 
             for i in 0..original_params.len() {
+                  
                 let aux1 = String::from(&original_params[i][..]);
                 let aux2 = String::from(recibed_params[i]);
-                params_map.insert(aux1, aux2);
+
+                if aux1.contains(":")
+                {
+                params_map.insert(String::from(&aux1[1..]), Data::STRING(aux2));                            
+                 }
             }
 
             Request {
@@ -234,25 +262,42 @@ pub mod express {
                 _original_endpoint: String::from(original),
             }
         }
+
+        pub fn get_param(&mut self,param_name:&str)->Option<Data>
+        {
+             self.params.remove(param_name)
+        }
     }
 
     pub struct Response
 //object to respond and serve data from server
     {
         stream: Arc<Mutex<TcpStream>>,
-        view_directory:String,        
+        view_directory: String,
     }
 
     impl Response {
-        fn new(stream: Arc<Mutex<TcpStream>>,view_directory:String) -> Response //constructor
+        fn new(stream: Arc<Mutex<TcpStream>>, view_directory: String) -> Response //constructor
         {
-            Response { stream ,view_directory}
+            Response {
+                stream,
+                view_directory,
+            }
         }
 
-        pub fn render(&mut self , filename:&str)->Result<(),Exception>
-        {
-            let format = if filename.ends_with(".html"){""}else{".html"};
-            let final_archive =format!("{}{}{}{}",self.view_directory,if filename.starts_with("/"){""}else{"/"},filename,format);
+        pub fn render(&mut self, filename: &str) -> Result<(), Exception> {
+            let format = if filename.ends_with(".html") {
+                ""
+            } else {
+                ".html"
+            };
+            let final_archive = format!(
+                "{}{}{}{}",
+                self.view_directory,
+                if filename.starts_with("/") { "" } else { "/" },
+                filename,
+                format
+            );
             self.send_file(&final_archive)?;
             Ok(())
         }

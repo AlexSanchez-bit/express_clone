@@ -1,4 +1,5 @@
 use express_clone::express::App;
+use express_clone::express::Data;
 fn main() {
     //-----------------
     let mut app = App::new(4);
@@ -9,12 +10,19 @@ fn main() {
     app.get("/", |_req, mut res| {
         res.render("/index.html").unwrap();
     });
-    app.get("/home", |_req, mut res| {
-        std::thread::sleep(std::time::Duration::from_secs(10));
+    app.get("/home/:param1", |mut req, mut res| {
+        let param = req.get_param("param1").unwrap();
+        match param
+        {
+            Data::STRING(i)=>{
+                println!("{}",i);
+            }
+            _=>{}
+        }
         res.send("respondido desde el home").unwrap();
     });
 
-    app.set("/post_data", |_req, _res| {
+    app.post("/", |_req, _res| {
         println!("se hizo post ");
     });
 

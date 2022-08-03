@@ -1,16 +1,16 @@
 pub mod express {
-    use crate::thread_pool::ThreadPool;
+    use thread_pool::thread_pool::ThreadPool;
     use std::collections::HashMap;
     use std::io::prelude::{Read, Write};
     use std::net::{TcpListener, TcpStream};
     use std::sync::{Arc, Mutex};
 
-    type Exception = Box<dyn std::error::Error>;
-    type CallbackContainer = HashMap<String, Arc<Mutex<CallbackCaller>>>;
-    type Callback = Box<dyn FnMut(Request, Response) + Send + 'static>;
+    type Exception = Box<dyn std::error::Error>; //to manage exceptions
+    type CallbackContainer = HashMap<String, Arc<Mutex<CallbackCaller>>>; //callback container 
+    type Callback = Box<dyn FnMut(Request, Response) + Send + 'static>; //traitobject to store callback
 
     struct CallbackCaller {
-        //para hacer box a los callbacks y poderlos pasar entre hilos
+        //allow to call the callbacks without drop the boxes
         callback: Callback,
     }
 
@@ -19,6 +19,7 @@ pub mod express {
         where
             T: FnMut(Request, Response) + Send + 'static,
         {
+            //storage the callback 
             CallbackCaller {
                 callback: Box::new(cb),
             }
@@ -26,17 +27,18 @@ pub mod express {
 
         fn call(&mut self, req: Request, res: Response) {
             (*self.callback)(req, res);
+            //call the methos without drop them 
         }
     }
 
-    enum HTTPSTATUS {
+    enum HTTPSTATUS { //status of the requests
         GET,
         POST,
         FILE,
         NOTFOUND,
     }
 
-    pub struct App {
+    pub struct App { //app manages and storage the whole page
         getter: CallbackContainer,
         setter: CallbackContainer,
         views: String,
@@ -49,17 +51,17 @@ pub mod express {
             App {
                 getter: HashMap::new(),
                 setter: HashMap::new(),
-                views: std::env::args().nth(0).unwrap(),
+                views: std::env::args().nth(0).unwrap(),//by default will be the original path to the app
                 static_folder: std::env::args().nth(0).unwrap(),
                 threads: thread_number,
             }
         }
 
-        pub fn static_folder(&mut self, path: &str) {
+        pub fn static_folder(&mut self, path: &str) { //set the static folder to get the files
             self.static_folder = String::from(path);
         }
 
-        pub fn set_views(&mut self, path: &str) {
+        pub fn set_views(&mut self, path: &str) {//set the view container for the render
             self.views = String::from(path);
         }
 
@@ -67,6 +69,7 @@ pub mod express {
         where
             T: FnMut(Request, Response) + Send + Sync + 'static,
         {
+            //add  the get endpoints
             let callback = Arc::new(Mutex::new(CallbackCaller::new(callback)));
             self.getter
                 .insert(String::from(format!("{}", end_point.trim())), callback);
@@ -75,62 +78,66 @@ pub mod express {
         pub fn post<T>(&mut self, end_point: &str, callback: T)
         where
             T: FnMut(Request, Response) + Send + Sync + 'static,
-        {
+        {//add the post endpoints
             let callback = Arc::new(Mutex::new(CallbackCaller::new(callback)));
             self.setter
                 .insert(String::from(format!("{}", end_point.trim())), callback);
         }
 
         pub fn listen(&mut self, ip: &str, port: u16) -> Result<bool, Box<dyn std::error::Error>> {
-            let listenner = TcpListener::bind(format!("{}:{}", ip, port))?;
-            let mut threads = ThreadPool::new(self.threads);
-            threads.initialize();
+            //starts the server at the ip and port
+            let listenner = TcpListener::bind(format!("{}:{}", ip, port))?;//start listenning the HTTP server
+            let mut threads = ThreadPool::new(self.threads);//creates the thread pool
+            threads.initialize();//initialize the thread pool
 
-            for stream in listenner.incoming() {
-                let mut buffer = [0; 516]; //buffer para leer la entrada de datos
-                let mut stream = stream.unwrap(); //stream para compartir datos por http
-                stream.read(&mut buffer).unwrap(); //leyendo entrada al buffer;
+            for stream in listenner.incoming() 
+            { //iterates over the incoming http requests (its lazy so it will run till server is down)
+                let mut buffer = [0; 516]; //buffer to read/write the requests
+                let mut stream = stream.unwrap(); //get the stream to manage the http request
+                stream.read(&mut buffer).unwrap(); //read the bytes to the buffer
 
                 let default: Callback = Box::new(|_req, mut res| {
                     res.send(" noting here to show ").unwrap();
-                }); //respuesta por defecto
+                }); //default answer
 
-                //creando los request y response para las respuestas
+                //creating request and response objects
                 let strea = Arc::new(Mutex::new(stream));
                 let res = Response::new(Arc::clone(&strea), self.views.clone());
 
-                let mut executor = Arc::new(Mutex::new(CallbackCaller::new(default))); //el que ejecutara los callbacks
+                let mut executor = Arc::new(Mutex::new(CallbackCaller::new(default))); //callback executor
 
-                let endp_status = App::handle_conection(buffer); //lee la entrada principal y devuelve el protocolo y el endpoint
+                let (status,endp) = App::handle_conection(buffer); //reads the data storaged in the buffer and returns the status and endpoint
 
-                let mut req = Request::new("", "");
-                match endp_status.0 {
+                let mut req = Request::new("", "");// creating the request
+                match status {  //matching the status
                     HTTPSTATUS::GET => {
-                        let cb =self.getter.get(&endp_status.1); 
-
+                        let cb = self.getter.get(&endp);
 
                         match cb {
                             Some(_cb) => {
-                        req = Request::new(&endp_status.1, &endp_status.1);
+                                req = Request::new(&endp, &endp);
                                 executor = Arc::clone(_cb);
+                                //if the request is on the container just set the req and the
+                                //executor to the order
                             }
                             None => {
-                                
-                                for key in self.getter.keys()
-                                {
-                                  if App::match_endp_params(key,&endp_status.1)
-                                  {                                     
-                                    req = Request::new(&endp_status.1, key);
-                                   executor = Arc::clone(self.getter.get(key).unwrap());
-                                   break;
-                                  }
+                                //else first see if any arg based endpoint matches the request
+                                for key in self.getter.keys() {
+                                    if App::match_endp_params(key, &endp) {
+                                        //if so set the variables
+                                        req = Request::new(&endp, key);
+                                        executor = Arc::clone(self.getter.get(key).unwrap());
+                                        break;
+                                    }
                                 }
+                                //else just throw the default answer
                             }
                         }
                     }
                     HTTPSTATUS::POST => {
-                        req = Request::new(&endp_status.1, &endp_status.1);
-                        let cb = self.setter.get(&endp_status.1);
+                        //same as GET
+                        req = Request::new(&endp, &endp);
+                        let cb = self.setter.get(&endp);
 
                         match cb {
                             Some(_cb) => {
@@ -140,11 +147,12 @@ pub mod express {
                         }
                     }
                     HTTPSTATUS::FILE => {
+                        //for FILE sending just try to read and show the message else
                         let st_folder = self.static_folder.clone();
                         let file_response: Callback = Box::new(move |_req, mut res| {
-                            res.send_file(&format!("{}/{}", st_folder, &endp_status.1))
+                            res.send_file(&format!("{}/{}", st_folder, &endp))
                                 .unwrap_or_else(|_| {
-                                    println!("no se encontro el archivo {}", endp_status.1);
+                                    println!("file not found {}", endp);
                                 });
                         });
                         executor = Arc::new(Mutex::new(CallbackCaller::new(file_response)));
@@ -153,34 +161,32 @@ pub mod express {
                 }
 
                 threads.send_data(move || {
-                    executor.lock().unwrap().call(req, res);
+                    executor.lock().unwrap().call(req, res);//manages the endpoint within the threadpool
                 });
             }
-            drop(self.threads);
+            drop(self.threads);//drop threadpool
             Ok(true)
         }
 
-        fn match_endp_params(with_params:&str,withouth:&str)->bool
-        {
-           let params = with_params.split("/"); 
-           let original = withouth.split("/");
+        fn match_endp_params(with_params: &str, withouth: &str) -> bool {
+            //true if an parametrized endpoint match the endpoint
+            let params = with_params.split("/");
+            let original = withouth.split("/");
 
-           if params.clone().count() != original.clone().count()
-           {
-             return false;
-           }
+            if params.clone().count() != original.clone().count() {
+                return false;
+            }
 
-           for (key1,key2) in params.zip(original)
-           {
-               if key1==key2
-               {
-                   return true;
-               }
-           }
+            for (key1, key2) in params.zip(original) {
+                if key1 == key2 && key1!="" {
+                    return true;
+                }
+            }
             false
         }
 
         fn handle_conection(buffer: [u8; 516]) -> (HTTPSTATUS, String) {
+            //handles the connection and return HTTPSTATUS and endpoint if matches
             let endp_name = App::chop_input(buffer).trim().to_string();
             let mut ret = (HTTPSTATUS::NOTFOUND, endp_name);
 
@@ -196,9 +202,11 @@ pub mod express {
         }
 
         fn is_file(enp_name: &String) -> bool {
+            //return if the endpoint references a file
             enp_name.contains(".")
         }
         fn chop_input(buffer: [u8; 516]) -> String {
+            //return the actual endpoint contained in the buffer
             let string = String::from_utf8_lossy(&buffer).to_string();
             let mut i = 0;
             let mut init = 0;
@@ -219,7 +227,7 @@ pub mod express {
 
     /*
      *
-     * idea de como podria ser un request
+     * how a request could look like
      *  app.get("/some/:param1/:param2/:param3",|req,res|{
      *    let param1 = req.params["param1"];
      *    res.send(param1);
@@ -229,8 +237,8 @@ pub mod express {
 
     pub enum Data {
         STRING(String),
-        INT(i32),
-        LONG(i64),
+        INT(i64),
+        FLOAT(f64),
         UNDEFINED,
     }
     pub struct Request
@@ -242,19 +250,33 @@ pub mod express {
 
     impl Request {
         fn new(recibed: &str, original: &str) -> Request {
+            //get the url parameters values and save them 
             let mut params_map = HashMap::new();
             let original_params = original.split("/").collect::<Vec<&str>>() as Vec<&str>;
             let recibed_params = recibed.split("/").collect::<Vec<&str>>();
 
             for i in 0..original_params.len() {
-                  
                 let aux1 = String::from(&original_params[i][..]);
                 let aux2 = String::from(recibed_params[i]);
 
-                if aux1.contains(":")
-                {
-                params_map.insert(String::from(&aux1[1..]), Data::STRING(aux2));                            
-                 }
+                if aux1.contains(":") {
+
+                    //tries to check datatypes and return them in a Data enum
+                    let mut data=Data::STRING(aux2.clone());                    
+                    let int = aux2.parse::<i64>();
+                    let float = aux2.parse::<f64>();
+
+                    if int.is_ok()
+                    {
+                        data=Data::INT(int.unwrap()); 
+                    }
+                    if float.is_ok()
+                    {
+                        data=Data::FLOAT(float.unwrap()); 
+                    }
+
+                    params_map.insert(String::from(&aux1[1..]),data);
+                }
             }
 
             Request {
@@ -263,14 +285,14 @@ pub mod express {
             }
         }
 
-        pub fn get_param(&mut self,param_name:&str)->Option<Data>
-        {
-             self.params.remove(param_name)
+        pub fn get_param(&mut self, param_name: &str) -> Option<Data> {
+            //returns the value of the url param behind the Data enum
+            self.params.remove(param_name)
         }
     }
 
     pub struct Response
-//object to respond and serve data from server
+        //object to describe the response
     {
         stream: Arc<Mutex<TcpStream>>,
         view_directory: String,
@@ -278,6 +300,7 @@ pub mod express {
 
     impl Response {
         fn new(stream: Arc<Mutex<TcpStream>>, view_directory: String) -> Response //constructor
+            //stream to manage the http response
         {
             Response {
                 stream,
@@ -286,6 +309,7 @@ pub mod express {
         }
 
         pub fn render(&mut self, filename: &str) -> Result<(), Exception> {
+            //renders the page based on the configured render //last thing still a job in progress
             let format = if filename.ends_with(".html") {
                 ""
             } else {
@@ -304,6 +328,7 @@ pub mod express {
 
         pub fn send_file(&mut self, filepath: &str) -> Result<(), Exception> //send a file
         {
+            //sends a file to the client
             use std::fs;
             let readed = fs::read(filepath)?;
 
@@ -325,125 +350,13 @@ pub mod express {
 
         pub fn send(&mut self, data: &str) -> Result<(), Exception> //send text
         {
+            //send a text to the client
             let status = "HTTP/1.1 200 OK\r\n\r\n";
             let response = format!(" {}{} ", status, data);
             let mut stream = self.stream.lock().unwrap();
             stream.write(response.as_bytes())?;
             stream.flush()?;
             Ok(())
-        }
-    }
-    //traits
-}
-
-mod thread_pool {
-    use std::sync::mpsc::{Receiver, Sender};
-    use std::sync::{Arc, Mutex};
-    use std::thread::JoinHandle;
-
-    //workers encargados de realizar las tareas en los hilos
-    type Job = Box<dyn FnOnce() + Send + 'static>; //un job es un punteroa un metodo que se llamara en el hilo
-
-    enum Message
-//message tiene un Doque contiene un job y un terminate para que el hilo termine su trabajo
-    {
-        Do(Job),
-        Terminate,
-    }
-    type Work = Arc<Mutex<Receiver<Message>>>; //work es un trabajo a realizar por cada hilo
-
-    struct Worker {
-        //estructura del worker
-        id: u32,
-        work_flow: JoinHandle<()>,
-    }
-
-    impl Worker {
-        fn new(id: u32, to_do: Work) -> Worker {
-            use std::thread;
-            Worker {
-                id,
-                work_flow: thread::spawn(move || loop {
-                    let pending_work = to_do.lock().unwrap().recv().unwrap(); //saca el message del Work
-
-                    match pending_work {
-                        Message::Do(job) => {
-                            //si se recibe un trabajo ejecutalo
-                            job();
-                        }
-                        Message::Terminate => {
-                            //si se termino rompe el bucle
-                            println!("cancelando hilo {}", id);
-                            break;
-                        }
-                    }
-                }),
-            }
-        }
-
-        fn finish(self) //espra a que los hilos terminen de ejecutar
-        {
-            let id = self.id;
-            self.work_flow.join().unwrap_or_else(|_| {
-                println!("error terminando el hilo: {}", id);
-            });
-        }
-    }
-
-    //estructura que contiene el thread_pool
-
-    pub struct ThreadPool {
-        number_of_threads: u16,
-        workers: Vec<Worker>,
-        data_sender: Sender<Message>,
-        data_receiver: Work,
-    }
-
-    impl ThreadPool {
-        pub fn new(numb: u16) -> ThreadPool {
-            let (snd, rv) = std::sync::mpsc::channel();
-            ThreadPool {
-                number_of_threads: numb,
-                workers: Vec::with_capacity(numb as usize),
-                data_sender: snd,
-                data_receiver: Arc::new(Mutex::new(rv)),
-            }
-        }
-
-        pub fn initialize(&mut self) {
-            for i in 0..self.number_of_threads {
-                self.workers
-                    .push(Worker::new(i as u32, Arc::clone(&self.data_receiver)));
-            }
-        }
-
-        pub fn send_data<T>(&self, method: T)
-        where
-            T: FnOnce() + Send + 'static,
-        {
-            self.data_sender
-                .send(Message::Do(Box::new(method)))
-                .unwrap_or_else(|err| {
-                    print!("fallo al enviar un trabajo :{}", err);
-                });
-        }
-    }
-    use std::ops::Drop;
-
-    impl Drop for ThreadPool {
-        fn drop(&mut self) {
-            for _ in 0..self.number_of_threads {
-                self.data_sender.send(Message::Terminate).unwrap();
-            }
-            while self.workers.len() > 0 {
-                let aux = self.workers.pop();
-                match aux {
-                    Some(worker) => {
-                        worker.finish();
-                    }
-                    _ => {}
-                }
-            }
         }
     }
 }

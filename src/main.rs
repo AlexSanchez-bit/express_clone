@@ -1,4 +1,4 @@
-use express::express::{App,Data};
+use express::{App,Data};
 fn main() {
     //-----------------
     let mut app = App::new(4);//parameter number of threads
@@ -8,8 +8,9 @@ fn main() {
    // app.set_views(""); //default "./"
 
     app.get("/", |_req, mut res| {
-        res.render("/index").unwrap();//render a file acording to the configured render (html) default
-        res.send_file("path/to/file").unwrap();//sends a file to the client
+        res.send(&std::env::args().nth(0).unwrap()).unwrap();
+       // res.render("/index").unwrap();//render a file acording to the configured render (html) default
+       // res.send_file("path/to/file").unwrap();//sends a file to the client
     });
     app.get("/home/:param1", |mut req, mut res| {
         let param = req.get_param("param1").unwrap();//get the parameter by name        

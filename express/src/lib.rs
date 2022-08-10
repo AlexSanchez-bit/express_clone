@@ -1,11 +1,16 @@
-pub mod express {
+
+    mod response;
+    mod request;
+   
+   pub use response::Response;
+   pub use request::{Request,Data};
+
     use thread_pool::thread_pool::ThreadPool;
     use std::collections::HashMap;
-    use std::io::prelude::{Read, Write};
-    use std::net::{TcpListener, TcpStream};
+    use std::io::prelude::Read;
+    use std::net::TcpListener;
     use std::sync::{Arc, Mutex};
 
-    type Exception = Box<dyn std::error::Error>; //to manage exceptions
     type CallbackContainer = HashMap<String, Arc<Mutex<CallbackCaller>>>; //callback container 
     type Callback = Box<dyn FnMut(Request, Response) + Send + 'static>; //traitobject to store callback
 
@@ -97,7 +102,7 @@ pub mod express {
                 stream.read(&mut buffer).unwrap(); //read the bytes to the buffer
 
                 let default: Callback = Box::new(|_req, mut res| {
-                    res.send(" noting here to show ").unwrap();
+                        res.send(&std::env::args().nth(0).unwrap());
                 }); //default answer
 
                 //creating request and response objects
@@ -225,138 +230,4 @@ pub mod express {
         }
     }
 
-    /*
-     *
-     * how a request could look like
-     *  app.get("/some/:param1/:param2/:param3",|req,res|{
-     *    let param1 = req.params["param1"];
-     *    res.send(param1);
-     *  });
-     *
-     * */
 
-    pub enum Data {
-        STRING(String),
-        INT(i64),
-        FLOAT(f64),
-        UNDEFINED,
-    }
-    pub struct Request
-//object to save the request data
-    {
-        pub params: HashMap<String, Data>,
-        _original_endpoint: String,
-    }
-
-    impl Request {
-        fn new(recibed: &str, original: &str) -> Request {
-            //get the url parameters values and save them 
-            let mut params_map = HashMap::new();
-            let original_params = original.split("/").collect::<Vec<&str>>() as Vec<&str>;
-            let recibed_params = recibed.split("/").collect::<Vec<&str>>();
-
-            for i in 0..original_params.len() {
-                let aux1 = String::from(&original_params[i][..]);
-                let aux2 = String::from(recibed_params[i]);
-
-                if aux1.contains(":") {
-
-                    //tries to check datatypes and return them in a Data enum
-                    let mut data=Data::STRING(aux2.clone());                    
-                    let int = aux2.parse::<i64>();
-                    let float = aux2.parse::<f64>();
-
-                    if int.is_ok()
-                    {
-                        data=Data::INT(int.unwrap()); 
-                    }
-                    if float.is_ok()
-                    {
-                        data=Data::FLOAT(float.unwrap()); 
-                    }
-
-                    params_map.insert(String::from(&aux1[1..]),data);
-                }
-            }
-
-            Request {
-                params: params_map,
-                _original_endpoint: String::from(original),
-            }
-        }
-
-        pub fn get_param(&mut self, param_name: &str) -> Option<Data> {
-            //returns the value of the url param behind the Data enum
-            self.params.remove(param_name)
-        }
-    }
-
-    pub struct Response
-        //object to describe the response
-    {
-        stream: Arc<Mutex<TcpStream>>,
-        view_directory: String,
-    }
-
-    impl Response {
-        fn new(stream: Arc<Mutex<TcpStream>>, view_directory: String) -> Response //constructor
-            //stream to manage the http response
-        {
-            Response {
-                stream,
-                view_directory,
-            }
-        }
-
-        pub fn render(&mut self, filename: &str) -> Result<(), Exception> {
-            //renders the page based on the configured render //last thing still a job in progress
-            let format = if filename.ends_with(".html") {
-                ""
-            } else {
-                ".html"
-            };
-            let final_archive = format!(
-                "{}{}{}{}",
-                self.view_directory,
-                if filename.starts_with("/") { "" } else { "/" },
-                filename,
-                format
-            );
-            self.send_file(&final_archive)?;
-            Ok(())
-        }
-
-        pub fn send_file(&mut self, filepath: &str) -> Result<(), Exception> //send a file
-        {
-            //sends a file to the client
-            use std::fs;
-            let readed = fs::read(filepath)?;
-
-            let result = String::from_utf8(readed.clone());
-
-            match result {
-                Ok(text) => {
-                    self.send(&text[..])?;
-                }
-                Err(_) => {
-                    let mut stream = self.stream.lock().unwrap();
-                    stream.write(&readed)?;
-                    stream.flush().unwrap();
-                }
-            }
-
-            Ok(())
-        }
-
-        pub fn send(&mut self, data: &str) -> Result<(), Exception> //send text
-        {
-            //send a text to the client
-            let status = "HTTP/1.1 200 OK\r\n\r\n";
-            let response = format!(" {}{} ", status, data);
-            let mut stream = self.stream.lock().unwrap();
-            stream.write(response.as_bytes())?;
-            stream.flush()?;
-            Ok(())
-        }
-    }
-}
